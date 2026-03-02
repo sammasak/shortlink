@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shortlink</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            color: #7c3aed;
+        }
+        .create-form {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .create-form h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .form-row {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        input[type="text"], input[type="url"] {
+            background: #0f172a;
+            border: 1px solid #475569;
+            color: #e2e8f0;
+            border-radius: 0.5rem;
+            padding: 0.6rem 1rem;
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        input[type="text"]:focus, input[type="url"]:focus {
+            border-color: #7c3aed;
+        }
+        .url-input { flex: 1; min-width: 200px; }
+        .code-input { width: 140px; }
+        button {
+            background: #7c3aed;
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            padding: 0.6rem 1.25rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        button:hover { background: #6d28d9; }
+        button.delete-btn {
+            background: transparent;
+            color: #ef4444;
+            border: 1px solid #ef4444;
+            padding: 0.3rem 0.75rem;
+            font-size: 0.8rem;
+        }
+        button.delete-btn:hover { background: #ef4444; color: white; }
+        .links-section h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        #links-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        #links-table th {
+            text-align: left;
+            padding: 0.6rem 1rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid #1e293b;
+        }
+        #links-table td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #1e293b;
+            font-size: 0.875rem;
+            vertical-align: middle;
+        }
+        #links-table tr:last-child td { border-bottom: none; }
+        #links-table tr:hover td { background: #1e293b; }
+        .code-cell {
+            font-family: 'Courier New', monospace;
+            font-weight: 700;
+            color: #7c3aed;
+        }
+        .code-link {
+            color: #7c3aed;
+            text-decoration: none;
+        }
+        .code-link:hover { text-decoration: underline; }
+        .url-cell {
+            color: #94a3b8;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .url-cell a { color: #94a3b8; text-decoration: none; }
+        .url-cell a:hover { color: #e2e8f0; text-decoration: underline; }
+        .hit-count { color: #34d399; font-weight: 600; }
+        .date-cell { color: #64748b; font-size: 0.8rem; }
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #475569;
+        }
+        .htmx-request { opacity: 0.7; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Shortlink</h1>
+
+        <div class="create-form">
+            <h2>Create Short Link</h2>
+            <form
+                hx-post="/links"
+                hx-target="body"
+                hx-swap="outerHTML"
+                hx-ext="json-enc"
+                class="form-row"
+            >
+                <input
+                    type="url"
+                    name="url"
+                    class="url-input"
+                    placeholder="https://example.com/long/url"
+                    required
+                />
+                <input
+                    type="text"
+                    name="code"
+                    class="code-input"
+                    placeholder="custom-code"
+                    pattern="[a-zA-Z0-9_-]+"
+                    title="Alphanumeric, hyphens, underscores only"
+                />
+                <button type="submit">Shorten</button>
+            </form>
+        </div>
+
+        <div class="links-section">
+            <h2>All Links</h2>
+            {% if links %}
+            <table id="links-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Target URL</th>
+                        <th>Hits</th>
+                        <th>Created</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for link in links %}
+                    <tr>
+                        <td class="code-cell">
+                            <a href="/{{ link.code }}" class="code-link" target="_blank">/{{ link.code }}</a>
+                        </td>
+                        <td class="url-cell">
+                            <a href="{{ link.target_url }}" target="_blank" title="{{ link.target_url }}">
+                                {{ link.target_url }}
+                            </a>
+                        </td>
+                        <td class="hit-count">{{ link.hit_count }}</td>
+                        <td class="date-cell">{{ link.created_at | date(format="%Y-%m-%d %H:%M") }}</td>
+                        <td>
+                            <button
+                                class="delete-btn"
+                                hx-delete="/links/{{ link.code }}"
+                                hx-target="body"
+                                hx-swap="outerHTML"
+                                hx-confirm="Delete /{{ link.code }}?"
+                            >Delete</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                No links yet. Create one above!
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        htmx.config.defaultSwapStyle = 'outerHTML';
+        document.addEventListener('DOMContentLoaded', function() {
+            document.body.addEventListener('htmx:configRequest', function(evt) {
+                if (evt.detail.verb === 'post') {
+                    const form = evt.detail.elt;
+                    const formData = {};
+                    new FormData(form).forEach((v, k) => {
+                        if (v) formData[k] = v;
+                    });
+                    evt.detail.parameters = formData;
+                }
+            });
+        });
+    </script>
+</body>
+</html>
