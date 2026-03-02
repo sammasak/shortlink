@@ -38,22 +38,33 @@ fn random_code() -> String {
         .collect()
 }
 
-#[get("/")]
-async fn index(data: web::Data<AppState>) -> impl Responder {
-    let links = sqlx::query_as::<_, Link>(
+async fn fetch_all_links(db: &PgPool) -> Vec<Link> {
+    sqlx::query_as::<_, Link>(
         "SELECT code, target_url, created_at, hit_count FROM links ORDER BY created_at DESC",
     )
-    .fetch_all(&data.db)
+    .fetch_all(db)
     .await
-    .unwrap_or_default();
+    .unwrap_or_default()
+}
 
+fn render_page(tera: &Tera, links: &[Link]) -> HttpResponse {
     let mut ctx = Context::new();
-    ctx.insert("links", &links);
-
-    match data.tera.render("index.html", &ctx) {
+    ctx.insert("links", links);
+    match tera.render("index.html", &ctx) {
         Ok(html) => HttpResponse::Ok().content_type("text/html").body(html),
         Err(e) => HttpResponse::InternalServerError().body(format!("Template error: {}", e)),
     }
+}
+
+#[get("/health")]
+async fn health() -> impl Responder {
+    HttpResponse::Ok().body("OK")
+}
+
+#[get("/")]
+async fn index(data: web::Data<AppState>) -> impl Responder {
+    let links = fetch_all_links(&data.db).await;
+    render_page(&data.tera, &links)
 }
 
 #[post("/links")]
@@ -71,33 +82,20 @@ async fn create_link(
         return HttpResponse::BadRequest().body("URL is required");
     }
 
-    match sqlx::query!(
-        "INSERT INTO links (code, target_url) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING RETURNING code",
-        code,
-        url
+    let result = sqlx::query(
+        "INSERT INTO links (code, target_url) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING",
     )
-    .fetch_optional(&data.db)
-    .await
-    {
-        Ok(Some(_)) => {
-            let links = sqlx::query_as::<_, Link>(
-                "SELECT code, target_url, created_at, hit_count FROM links ORDER BY created_at DESC",
-            )
-            .fetch_all(&data.db)
-            .await
-            .unwrap_or_default();
+    .bind(&code)
+    .bind(&url)
+    .execute(&data.db)
+    .await;
 
-            let mut ctx = Context::new();
-            ctx.insert("links", &links);
-
-            match data.tera.render("index.html", &ctx) {
-                Ok(html) => HttpResponse::Ok().content_type("text/html").body(html),
-                Err(e) => {
-                    HttpResponse::InternalServerError().body(format!("Template error: {}", e))
-                }
-            }
+    match result {
+        Ok(r) if r.rows_affected() > 0 => {
+            let links = fetch_all_links(&data.db).await;
+            render_page(&data.tera, &links)
         }
-        Ok(None) => HttpResponse::Conflict().body(format!("Code '{}' already exists", code)),
+        Ok(_) => HttpResponse::Conflict().body(format!("Code '{}' already exists", code)),
         Err(e) => HttpResponse::InternalServerError().body(format!("Database error: {}", e)),
     }
 }
@@ -106,18 +104,19 @@ async fn create_link(
 async fn redirect(data: web::Data<AppState>, path: web::Path<String>) -> impl Responder {
     let code = path.into_inner();
 
-    // Skip special routes
+    // Skip special routes handled by other handlers
     if code == "health" || code == "metrics" || code == "links" {
         return HttpResponse::NotFound().body("Not found");
     }
 
-    match sqlx::query_scalar::<_, String>(
+    let result = sqlx::query_scalar::<_, String>(
         "UPDATE links SET hit_count = hit_count + 1 WHERE code = $1 RETURNING target_url",
     )
     .bind(&code)
     .fetch_optional(&data.db)
-    .await
-    {
+    .await;
+
+    match result {
         Ok(Some(target_url)) => HttpResponse::MovedPermanently()
             .append_header(("Location", target_url))
             .finish(),
@@ -130,36 +129,19 @@ async fn redirect(data: web::Data<AppState>, path: web::Path<String>) -> impl Re
 async fn delete_link(data: web::Data<AppState>, path: web::Path<String>) -> impl Responder {
     let code = path.into_inner();
 
-    match sqlx::query!("DELETE FROM links WHERE code = $1", code)
+    let result = sqlx::query("DELETE FROM links WHERE code = $1")
+        .bind(&code)
         .execute(&data.db)
-        .await
-    {
-        Ok(result) if result.rows_affected() > 0 => {
-            let links = sqlx::query_as::<_, Link>(
-                "SELECT code, target_url, created_at, hit_count FROM links ORDER BY created_at DESC",
-            )
-            .fetch_all(&data.db)
-            .await
-            .unwrap_or_default();
+        .await;
 
-            let mut ctx = Context::new();
-            ctx.insert("links", &links);
-
-            match data.tera.render("index.html", &ctx) {
-                Ok(html) => HttpResponse::Ok().content_type("text/html").body(html),
-                Err(e) => {
-                    HttpResponse::InternalServerError().body(format!("Template error: {}", e))
-                }
-            }
+    match result {
+        Ok(r) if r.rows_affected() > 0 => {
+            let links = fetch_all_links(&data.db).await;
+            render_page(&data.tera, &links)
         }
         Ok(_) => HttpResponse::NotFound().body("Link not found"),
         Err(e) => HttpResponse::InternalServerError().body(format!("Database error: {}", e)),
     }
-}
-
-#[get("/health")]
-async fn health() -> impl Responder {
-    HttpResponse::Ok().body("OK")
 }
 
 #[actix_web::main]
